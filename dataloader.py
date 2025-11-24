@@ -2,13 +2,17 @@ import numpy as np
 import random
 import os
 import tensorflow as tf
+from PIL import Image
+from keras.applications.resnet50 import ResNet50
+from keras.applications.resnet50 import preprocess_input
 
 MobileNet_path = './MobileNet/'
 ResNet_path = './ResNet/'
 CLIP_path = './Clip/'
 ViT_path = './ViT/'
 swin_ViT_path = './swin-ViT/'
-
+# Load model
+resnet_model = ResNet50(include_top=False, pooling='avg')
 
 def dataLoader(setIndex, featureType='ResNet'):
     folder_name = ['STL-10', 'CIFAR-10', 'MIT-Places-Small', 'MNIST', 'Fashion-MNIST' \
@@ -231,3 +235,21 @@ def load_data_with_outliers(all_feats, all_labels, ind, p):
     return data, labels
 
 
+def extract_resnet50_feature(img_path):
+    """
+    Extracts a ResNet50 feature vector from a single image.
+    Output shape = (2048,)
+    """
+    # Load and resize
+    img = Image.open(img_path).convert("RGB").resize((224, 224))
+
+    # Convert to array and preprocess
+    arr = np.array(img)[None, ...]  # shape (1, 224, 224, 3)
+    arr = preprocess_input(arr)
+
+    # Forward pass
+    feat = resnet_model.predict(arr, verbose=0)[0]  # shape (2048,)
+
+    return feat.astype(np.float32)
+
+   
