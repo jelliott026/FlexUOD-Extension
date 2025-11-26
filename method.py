@@ -220,12 +220,6 @@ class DaDTAnomalyDetector:
 
         return score, spearmanr_simi
 
-    def compute_boundary(self, scores):
-        mean = np.mean(scores)
-        std = np.std(scores)
-        threshold = mean * 2
-        return threshold
-
     def predict_labels(self, data):
         scores, contamination_factor = self.dadt_alt(data)
 
@@ -239,28 +233,6 @@ class DaDTAnomalyDetector:
         print(f"Threshold: {threshold}")
         labels = (scores > threshold).astype(int)
         return scores, labels
-
-    def compute_shell_labels(self, data, thres=1.0, min_samples=5):
-        # Normalize per DaDT
-        data_ins, _ = self.normErgo(data)
-
-        # Estimate shell on normalized data
-        m_, var, eSig = estShell(data_ins)
-
-        # distances and absolute residual
-        d = np.linalg.norm(data_ins - m_, axis=1)
-        err_abs = np.abs(d - var)  # <-- absolute residual (important)
-
-        # handle degenerate eSig
-        if np.isnan(eSig) or eSig == 0:
-            # fallback: use a high percentile as boundary
-            fallback_thresh = np.percentile(err_abs, 95)  # top 5% as outliers
-            labels = (err_abs > fallback_thresh).astype(int)
-            return err_abs, labels
-        print(f"Esig = {eSig}")
-        # normal path: shell boundary
-        labels = (err_abs > (eSig * thres)).astype(int)
-        return err_abs, labels
 
 
 # CHATGPT possible implementation idea to have a constantly updating model (needs testing, not currently in use)--->
