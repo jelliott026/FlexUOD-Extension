@@ -1,14 +1,9 @@
-import copy
-import timeit
-
 import cupy as cp
 import numpy as np
-import pyod
 import scipy
 import scipy.stats
-from numpy.linalg import norm
+from numpy.typing import ArrayLike, NDArray
 from scipy import stats
-from scipy.special import kl_div
 
 
 def dist(data, c=None):
@@ -18,223 +13,192 @@ def dist(data, c=None):
     return d
 
 
-def normIt(data, m=None):
-    if m is None:
-        m = cp.mean(data)
-    nData = data - m
-    nData = nData / cp.linalg.norm(nData, axis=1, keepdims=True)
-    return nData
+def norm_it(data, mean=None):
+    if mean is None:
+        mean = cp.mean(data)
+    n_data = data - mean
+    n_data = n_data / cp.linalg.norm(n_data, axis=1, keepdims=True)
+    return n_data
 
 
-def estShell(data):
+def est_shell(data):
     mean = cp.mean(data, axis=0, keepdims=True)
     d = cp.linalg.norm(data - mean, axis=1)
     var = cp.mean(d)
 
     err = cp.absolute(d - var)
     MAD = cp.median(err)
-    eSig = 1.4826 * MAD
+    e_sig = 1.4826 * MAD
 
-    return mean, var, eSig
+    return mean, var, e_sig
 
 
-def projectMean(data, m, var):
+def project_mean(data, m, var):
     d = cp.linalg.norm(data - m, axis=1)
     err = d - var
     return err
 
 
-def robustMean(featTrain, globalMean, thres=1, numIter=10):
+def robust_mean(feat_train, global_mean, thres=1, numIter=10):
 
-    feat = normIt(featTrain, globalMean)
-    m_, var, eSig = estShell(feat)
-    err = projectMean(feat, m_, var)
-    mask = err > eSig * thres
+    feat = norm_it(feat_train, global_mean)
+    m_, var, e_sig = est_shell(feat)
+    err = project_mean(feat, m_, var)
+    mask = err > e_sig * thres
 
-    meanInlier = cp.mean(featTrain[mask, :], axis=0)
-    meanOutlier = cp.mean(featTrain[~mask, :], axis=0)
-    globalMean = (meanInlier + meanOutlier) / 2
+    mean_inlier = cp.mean(feat_train[mask, :], axis=0)
+    mean_outlier = cp.mean(feat_train[~mask, :], axis=0)
+    global_mean = (mean_inlier + mean_outlier) / 2
 
     for _ in range(numIter):
-        feat = normIt(featTrain, globalMean)
-        m_, var, eSig = estShell(feat[mask])
-        err = projectMean(feat, m_, var)
-        mask = err > eSig * thres
+        feat = norm_it(feat_train, global_mean)
 
-        meanInlier = cp.mean(featTrain[mask, :], axis=0)
-        meanOutlier = cp.mean(featTrain[~mask, :], axis=0)
-        globalMean = (meanInlier + meanOutlier) / 2
-        # newMean = meanOutlier
+        # prevent errors from occurring if the masked features return an empty array
+        if len(feat[mask]) == 0:
+            return err
+
+        m_, var, e_sig = est_shell(feat[mask])
+        err = project_mean(feat, m_, var)
+        mask = err > e_sig * thres
+
+        mean_inlier = cp.mean(feat_train[mask, :], axis=0)
+        mean_outlier = cp.mean(feat_train[~mask, :], axis=0)
+        global_mean = (mean_inlier + mean_outlier) / 2
+
     return err
 
 
-class DaDTAnomalyDetector:
-    def normZscore(self, data, m=None):
-        if m is None:
-            m = cp.mean(data)
-        nData = data - m
-        nData = nData / cp.std(nData)
-        return nData, m
+def norm_zscore(data, mean=None):
+    if mean is None:
+        mean = cp.mean(data)
+    n_data = data - mean
+    n_data = n_data / cp.std(n_data)
+    return n_data, mean
 
-    def normErgo(self, data, m=None):
-        if m is None:
-            m = cp.mean(data)
-        nData = data - m
-        nData = nData / cp.linalg.norm(nData, axis=1, keepdims=True)
-        return nData, m
 
-    def KL_(self, d1, d2):
-        return scipy.stats.entropy(d1.get(), d2.get())
+def norm_ergo(data, mean=None):
+    if mean is None:
+        mean = cp.mean(data)
+    n_data = data - mean
+    n_data = n_data / cp.linalg.norm(n_data, axis=1, keepdims=True)
+    return n_data, mean
 
-    def three_sigma(self, d, reverse=True):
-        mean = cp.mean(d)
-        std = cp.std(d)
-        if reverse:
-            thres = mean + 3 * std
-        else:
-            thres = mean - 3 * std
-        return thres
 
-    def cos_sim(self, data_norm, m=None):
-        if m is None:
-            m = cp.mean(data_norm, axis=0)
-        d = []
-        for i in range(data_norm.shape[0]):
-            cosine = cp.dot(data_norm[i], m) / (norm(data_norm[i]) * norm(m))
-            d.append(cosine)
-        return d
+def KL_(d1, d2):
+    return scipy.stats.entropy(d1.get(), d2.get())
 
-    def dist(self, data, c=None):
-        if c is None:
-            c = cp.mean(data, axis=0)
-        d = cp.linalg.norm(data - c, axis=1) ** 2
-        return d
 
-    def brayCurtis_dist(self, data, c=None):
-        if c is None:
-            c = cp.mean(data, axis=0)
-        d = cp.sum(cp.abs(data - c), axis=1) / cp.sum(cp.abs(data + c), axis=1)
-        return d
+def three_sigma(d, reverse=True):
+    mean = cp.mean(d)
+    std = cp.std(d)
+    if reverse:
+        thres = mean + 3 * std
+    else:
+        thres = mean - 3 * std
+    return thres
 
-    ## f_low
-    def dadt_simple_(self, data, metric="l2"):
-        data_ins, _ = self.normErgo(data)
-        data_, _ = self.normZscore(data)
 
-        ss = cp.mean(cp.abs((data_ - cp.mean(data_, axis=0))), axis=1)
-        ss_ = cp.mean(cp.abs((data_ + cp.mean(data_, axis=0))), axis=1)
-
-        if self.KL_(ss, ss_) < 0.05 and self.three_sigma(
-            ss_, reverse=False
-        ) > self.three_sigma(ss, reverse=True):
-            score_dadt = self.brayCurtis_dist(data_)
-        else:
-            score_dadt = self.dist(data_ins)
-
-        globalMean = cp.mean(data_ins, axis=0)
-        score_re = robustMean(data_ins, globalMean, thres=1, numIter=10)
-
-        score_bc_norm = (score_dadt - cp.min(score_dadt)) / (
-            cp.max(score_dadt) - cp.min(score_dadt)
+def cos_similarity(data_norm, mean=None):
+    if mean is None:
+        mean = cp.mean(data_norm, axis=0)
+    d = []
+    for i in range(data_norm.shape[0]):
+        cosine = cp.dot(data_norm[i], mean) / (
+            cp.linalg.norm(data_norm[i]) * cp.linalg.norm(mean)
         )
-        score_re_norm = (score_re - cp.min(score_re)) / (
-            cp.max(score_re) - cp.min(score_re)
-        )
-        score = (2 * score_re_norm + 1 * score_bc_norm) / 2
-        return score
+        d.append(cosine)
+    return d
 
-    def dadt_(self, data, metric="l2"):
-        data_ins, _ = self.normErgo(data)
-        data_, _ = self.normZscore(data)
 
-        ss = cp.mean(cp.abs(data_ - cp.mean(data_, axis=0)), axis=1)
-        ss_ = cp.mean(cp.abs(data_ + cp.mean(data_, axis=0)), axis=1)
+def dist(data, centroid=None):
+    if centroid is None:
+        centroid = cp.mean(data, axis=0)
+    d = cp.linalg.norm(data - centroid, axis=1) ** 2
+    return d
 
-        if self.KL_(ss, ss_) < 0.05 and self.three_sigma(
-            ss_, reverse=False
-        ) > self.three_sigma(ss, reverse=True):
-            score_dadt = self.brayCurtis_dist(data_)
-        else:
-            score_dadt = self.dist(data_ins)
 
-        globalMean = cp.mean(data_ins, axis=0)
-        score_re = robustMean(data_ins, globalMean, thres=1, numIter=10)
+def bray_curtis_dist(data, center=None):
+    if center is None:
+        center = cp.mean(data, axis=0)
+    d = cp.sum(cp.abs(data - center), axis=1) / cp.sum(cp.abs(data + center), axis=1)
+    return d
 
-        sort_list_bc = cp.argsort(score_dadt)
-        sort_list_re = cp.argsort(score_re)
 
-        spearmanr_simi = stats.spearmanr(sort_list_bc, sort_list_re).statistic
+def predict_scores(
+    data: ArrayLike, cuda_out: bool = False
+) -> tuple[NDArray[np.float32], float]:
+    """Predicts the outlier scores for the given features.
 
-        if round(spearmanr_simi, 2) >= 0.3:
-            score = score_re
-        elif round(spearmanr_simi, 2) >= 0.1:
-            score_bc_norm = (score_dadt - cp.min(score_dadt)) / (
-                cp.max(score_dadt) - cp.min(score_dadt)
-            )
-            score_re_norm = (score_re - cp.min(score_re)) / (
-                cp.max(score_re) - cp.min(score_re)
-            )
-            score = (score_re_norm + score_bc_norm) / 2
-        else:
-            score = score_dadt
+    Args:
+        data: The features to process. Should be a 2D array or something similar. Axis 0 corresponds to
+            features and axis 1 feature elements.
+        cuda_out: Whether to output cupy arrays (True) or numpy arrays (False). Defaults to False.
 
-        return score
+    Returns:
+        The tuple (scores, contamination_factor). The scores element may either be a cupy or numpy array depending
+            on the value of `cuda_out`.
+    """
+    data = cp.array(data)
+    singular_mean = cp.mean(data)
 
-    def dadt_alt(self, data, metric="l2", cuda_out=False):
-        data = cp.array(data)
-        singularMean = cp.mean(data)
+    data_ins, _ = norm_ergo(data, singular_mean)
+    data_zscore, _ = norm_zscore(data, singular_mean)
 
-        data_ins, _ = self.normErgo(data, singularMean)
-        data_, _ = self.normZscore(data, singularMean)
+    data_zcenter = cp.mean(data_zscore, axis=0)
 
-        dataMean = cp.mean(data_, axis=0)
+    ss = cp.mean(cp.abs((data_zscore - data_zcenter)), axis=1)
+    ss_ = cp.mean(cp.abs((data_zscore + data_zcenter)), axis=1)
 
-        ss = cp.mean(cp.abs((data_ - dataMean)), axis=1)
-        ss_ = cp.mean(cp.abs((data_ + dataMean)), axis=1)
+    if KL_(ss, ss_) < 0.05 and three_sigma(ss_, reverse=False) > three_sigma(
+        ss, reverse=True
+    ):
+        score_dadt = bray_curtis_dist(data_zscore, data_zcenter)
+    else:
+        score_dadt = dist(data_ins, data_zcenter)
 
-        if self.KL_(ss, ss_) < 0.05 and self.three_sigma(
-            ss_, reverse=False
-        ) > self.three_sigma(ss, reverse=True):
-            score_dadt = self.brayCurtis_dist(data_, dataMean)
-        else:
-            score_dadt = self.dist(data_ins, dataMean)
+    data_ins_center = cp.mean(data_ins, axis=0)
+    score_re = robust_mean(data_ins, data_ins_center, thres=1, numIter=10)
 
-        globalMean = cp.mean(data_ins, axis=0)
-        score_re = robustMean(data_ins, globalMean, thres=1, numIter=10)
+    sort_list_bc = cp.argsort(score_dadt)
+    sort_list_re = cp.argsort(score_re)
 
-        sort_list_bc = cp.argsort(score_dadt)
-        sort_list_re = cp.argsort(score_re)
+    spearmanr_simi = stats.spearmanr(sort_list_bc.get(), sort_list_re.get()).statistic
 
-        spearmanr_simi = stats.spearmanr(
-            sort_list_bc.get(), sort_list_re.get()
-        ).statistic
+    if round(spearmanr_simi, 2) >= 0.3:
+        score = score_re
+    elif round(spearmanr_simi, 2) >= 0.1:
+        dadt_min = cp.min(score_dadt)
+        re_min = cp.min(score_re)
+        score_bc_norm = (score_dadt - dadt_min) / (cp.max(score_dadt) - dadt_min)
+        score_re_norm = (score_re - re_min) / (cp.max(score_re) - re_min)
+        score = (score_re_norm + score_bc_norm) / 2
+    else:
+        score = score_dadt
 
-        if round(spearmanr_simi, 2) >= 0.3:
-            score = score_re
-        elif round(spearmanr_simi, 2) >= 0.1:
-            dadt_min = cp.min(score_dadt)
-            re_min = cp.min(score_re)
-            score_bc_norm = (score_dadt - dadt_min) / (cp.max(score_dadt) - dadt_min)
-            score_re_norm = (score_re - re_min) / (cp.max(score_re) - re_min)
-            score = (score_re_norm + score_bc_norm) / 2
-        else:
-            score = score_dadt
+    if cuda_out:
+        return score, spearmanr_simi
+    else:
+        return score.get(), spearmanr_simi
 
-        if cuda_out:
-            return score, spearmanr_simi
-        else:
-            return score.get(), spearmanr_simi
 
-    def predict_labels(self, data):
-        scores, contamination_factor = self.dadt_alt(data, cuda_out=True)
+def predict_labels(data: ArrayLike) -> tuple[NDArray[np.float32], NDArray[np.int32]]:
+    """Implementation of labeling method mentioned in paper but not implemented.
 
-        # this is the threshold calculation mentioned in the paper
-        # basically, this sets the threshold such that the resultant outlier ratio
-        # of our predictions matches the contamination factor calculate by the method
-        threshold = cp.sort(scores)[
-            int(scores.size * (1 - cp.abs(contamination_factor)))
-        ]
-        # threshold = self.compute_boundary(scores)
-        # print(f"Threshold: {threshold}")
-        labels = (scores > threshold).astype(int)
-        return scores.get(), labels.get()
+    Effectively, we assume the given contamination factor is correct and select the
+    outlier score within `outlier_scores` that results in a matching outlier ratio.
+
+    Args:
+        data: An array of features (see `predict_scores`).
+
+    Returns:
+        The tuple (outlier_scores, outlier_labels). Both arrays correspond directly with input data;
+            a label of `1` corresponds to outliers and `0` inliers.
+    """
+    scores, contamination_factor = predict_scores(data, cuda_out=True)
+
+    # this is the threshold calculation mentioned in the paper
+    # basically, this sets the threshold such that the resultant outlier ratio
+    # of our predictions matches the contamination factor calculate by the method
+    threshold = cp.sort(scores)[int(scores.size * (1 - cp.abs(contamination_factor)))]
+    labels = (scores > threshold).astype(np.int32)
+    return scores.get(), labels.get()
