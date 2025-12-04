@@ -17,6 +17,7 @@ num_frames = 5000
 
 # create fake "video"
 if not frames_path.exists():
+    print("Generating Video...")
     mean = 0
     std_dev = 0.2
 
@@ -42,11 +43,13 @@ if not frames_path.exists():
     with open(frames_path, "wb") as f:
         np.save(f, frames)
 else:
+    print("Loading Saved Video...")
     frames = np.load(frames_path)
 
 
 # detect ResNet50 features
 if not features_path.exists():
+    print("Generating Features...")
     from keras.applications.resnet50 import ResNet50, preprocess_input
 
     resnet_model = ResNet50(include_top=False, weights="imagenet", pooling="avg")
@@ -66,6 +69,7 @@ if not features_path.exists():
     with open(features_path, "wb") as f:
         np.save(f, features)
 else:
+    print("Loading Saved Features...")
     features = np.load(features_path)
 
 
@@ -84,7 +88,9 @@ plt.figure()
 plt.plot(full_labels, alpha=0.25, label="Raw Output")
 plt.plot(gaussian_filter1d(full_labels, 3), label="Convolved Output")
 plt.plot(gt_labels, "--", label="Ground Truth")
-plt.ylabel("Label")
+plt.ylabel("Label (1 = outlier, 0 = inlier)")
 plt.xlabel("Frame")
+plt.xlim(-10, 2010)
 plt.legend()
+plt.title("Outlier Detection on Fake Video with FlexUOD Extension")
 plt.show()
