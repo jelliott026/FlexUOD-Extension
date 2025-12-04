@@ -6,12 +6,12 @@ import tensorflow as tf
 from keras.applications.resnet50 import ResNet50, preprocess_input
 from PIL import Image
 
-MobileNet_path = "./MobileNet/"
+MobileNet_path = "./data/MobileNet/"
 ResNet_path = "./data/ResNet/"
-CLIP_path = "./Clip/"
-ViT_path = "./ViT/"
-swin_ViT_path = "./swin-ViT/"
-# Load model
+CLIP_path = "./data/Clip/"
+ViT_path = "./data/ViT/"
+swin_ViT_path = "./data/swin-ViT/"
+# Load ResNet model
 resnet_model = ResNet50(include_top=False, weights="imagenet", pooling="avg")
 
 
